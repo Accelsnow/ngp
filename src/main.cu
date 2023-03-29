@@ -83,6 +83,13 @@ int main_func(const std::vector<std::string>& arguments) {
 		{'s', "scene"},
 	};
 
+    ValueFlag<uint32_t> step_flag{
+            parser,
+            "STEPS",
+            "Number of steps",
+            {"steps"},
+    };
+
 	ValueFlag<string> snapshot_flag{
 		parser,
 		"SNAPSHOT",
@@ -181,12 +188,22 @@ int main_func(const std::vector<std::string>& arguments) {
 		testbed.init_vr();
 	}
 
-	// Render/training loop
-	while (testbed.frame()) {
-		if (!gui) {
-			tlog::info() << "iteration=" << testbed.m_training_step << " loss=" << testbed.m_loss_scalar.val();
-		}
-	}
+    uint32_t n_steps = step_flag ? get(step_flag) : 0;
+    // Render/training loop
+    if (n_steps <= 0){
+        while (testbed.frame()) {
+            if (!gui) {
+                tlog::info() << "iteration=" << testbed.m_training_step << " loss=" << testbed.m_loss_scalar.val();
+            }
+        }
+    } else {
+        for (uint32_t i = 0; i < n_steps; ++i){
+            if (!testbed.frame()) break;
+            if (!gui) {
+                tlog::info() << "iteration=" << testbed.m_training_step << " loss=" << testbed.m_loss_scalar.val();
+            }
+        }
+    }
 
 	return 0;
 }
