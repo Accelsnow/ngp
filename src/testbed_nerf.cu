@@ -35,7 +35,10 @@
 
 #include <filesystem/directory.h>
 #include <filesystem/path.h>
-
+#include <string>
+#include <iostream>
+#include <random>
+#include <algorithm>
 
 #ifdef copysign
 #undef copysign
@@ -3446,7 +3449,11 @@ NGP_NAMESPACE_BEGIN
         }
     }
 
+
+    unsigned stp = 0;
+
     void Testbed::train_nerf_step(uint32_t target_batch_size, Testbed::NerfCounters &counters, cudaStream_t stream) {
+        ++stp;
         const uint32_t padded_output_width = m_network->padded_output_width();
         const uint32_t max_samples = target_batch_size * 16; // Somewhat of a worst case
         const uint32_t floats_per_coord = sizeof(NerfCoordinate) / sizeof(float) + m_nerf_network->n_extra_dims();
@@ -3563,6 +3570,226 @@ NGP_NAMESPACE_BEGIN
                       m_nerf_network->n_extra_dims()
         );
 
+
+//      GENERATE DATA POINT
+//    if (stp == 1200) {
+//        std::cout << "fin gen" << std::endl;
+//        auto host_points = new float[floats_per_coord * max_inference * sizeof(float)];
+//        cudaMemcpy(host_points, coords, floats_per_coord * max_inference * sizeof(float), cudaMemcpyDeviceToHost);
+//        std::ofstream myFile;
+//        myFile.open("data_point.txt");
+//        for (int i = 0; i < max_inference; ++i){
+//            for (int j = 0; j < floats_per_coord; ++j){
+//                myFile << host_points[i * floats_per_coord + j] << ", ";
+//            }
+//            myFile << std::endl;
+//        }
+//        myFile.close();
+//        delete[] host_points;
+//    }
+
+//      REPLACE WITH DATA POINT
+//    if (stp == 1200) {
+//        std::cout << "REPLACE DATA PT" << std::endl;
+//        unsigned size = max_inference * floats_per_coord;
+//        auto float_array = new float[size * sizeof(float)];
+//        std::ifstream infile("data_point_lego_sorted_end_point.txt"); // Replace filename.txt with the actual name of your file
+//        std::string line;
+//        int array_size = 0;
+//        std::string delimiter = ", "; // The delimiter that separates the floating point numbers
+//
+//        while (getline(infile, line)) { // Read each line of the file
+//            size_t pos = 0;
+//            std::string token;
+//
+//            while ((pos = line.find(delimiter)) != std::string::npos) {
+//                token = line.substr(0, pos);
+//                if (array_size < size) { // Only add the float to the array if we haven't exceeded the maximum size
+//                    float_array[array_size] = stof(token);
+//                    array_size++;
+//                }
+//                line.erase(0, pos + delimiter.length()); // Erase the token and the delimiter from the line
+//            }
+//
+//            if (array_size < size) { // Only add the last float to the array if we haven't exceeded the maximum size
+//                float_array[array_size] = stof(line);
+//                array_size++;
+//            }
+//        }
+//
+//        if (cudaMemcpy(coords, float_array, floats_per_coord * max_inference * sizeof(float), cudaMemcpyHostToDevice) != cudaSuccess) {
+//            std::cerr << "ERROR MEMCPY " << std::endl;
+//            exit(1);
+//        }
+//        delete[] float_array;
+//    }
+
+//      REORDER
+//    if (stp > 100) {
+//        uint32_t num_rays;
+//        CUDA_CHECK_THROW(cudaMemcpy(&num_rays, ray_counter, sizeof(uint32_t), cudaMemcpyDeviceToHost));
+//        uint32_t host_ray_indices [num_rays];
+//        CUDA_CHECK_THROW(cudaMemcpy(ray_indices, host_ray_indices, num_rays * sizeof(uint32_t), cudaMemcpyHostToDevice));
+//    }
+
+        bool getfile = false;
+
+        if (stp > 200) {
+            uint32_t num_rays;
+            CUDA_CHECK_THROW(cudaMemcpy(&num_rays, ray_counter, sizeof(uint32_t), cudaMemcpyDeviceToHost));
+            // counters.numsteps_counter.data() is NOT number of points (threads add to this variable even after limit)
+
+            if (num_rays) {
+                std::vector<uint32_t> shuf_ray_idx = {};
+                for (uint32_t i = 0; i < num_rays; ++i) shuf_ray_idx.push_back(i);
+                std::shuffle(shuf_ray_idx.begin(), shuf_ray_idx.end(), std::mt19937(std::random_device{}()));
+
+                auto host_numsteps = new uint32_t[num_rays * 2];
+                CUDA_CHECK_THROW(
+                        cudaMemcpy(host_numsteps, numsteps, 2 * num_rays * sizeof(uint32_t), cudaMemcpyDeviceToHost));
+
+                if (host_numsteps[1] != 0) {
+                    std::cout << "ERROR HOST NUMSTEP " << host_numsteps[1] << std::endl;
+                    delete[] host_numsteps;
+                    goto after_reorder;
+                }
+
+                uint32_t num_pts = host_numsteps[(num_rays - 1) * 2] + host_numsteps[(num_rays - 1) * 2 + 1];
+                std::cout << num_pts << " " << num_rays << std::endl;
+
+                auto host_points = new float[num_pts * floats_per_coord];
+                auto host_ray_indices = new uint32_t[num_rays];
+                auto host_rays_unnormalized = new Ray[num_rays];
+                CUDA_CHECK_THROW(cudaMemcpy(host_points, coords, num_pts * floats_per_coord * sizeof(float),
+                                            cudaMemcpyDeviceToHost));
+                CUDA_CHECK_THROW(
+                        cudaMemcpy(host_ray_indices, ray_indices, num_rays * sizeof(uint32_t), cudaMemcpyDeviceToHost));
+                CUDA_CHECK_THROW(cudaMemcpy(host_rays_unnormalized, rays_unnormalized, num_rays * sizeof(Ray),
+                                            cudaMemcpyDeviceToHost));
+
+                auto new_host_points = new float[num_pts * floats_per_coord];
+                auto new_host_ray_indices = new uint32_t[num_rays];
+                auto new_host_rays_unnormalized = new Ray[num_rays];
+                auto new_host_numsteps = new uint32_t[num_rays * 2];
+
+                if (getfile) {
+                    std::ofstream myFile;
+                    uint32_t myct;
+                    myFile.open("pt1.txt");
+                    myct = 0;
+                    while (myct < num_pts) {
+                        for (int j = 0; j < floats_per_coord; ++j) {
+                            myFile << host_points[myct * 7 + j] << ", ";
+                        }
+                        ++myct;
+                        myFile << "\n";
+                    }
+                    myFile.close();
+
+                    myFile.open("id1.txt");
+                    myct = 0;
+                    while (myct < num_rays) {
+                        myFile << host_ray_indices[myct] << "\n";
+                        ++myct;
+                    }
+                    myFile.close();
+
+                    myFile.open("unorm1.txt");
+                    myct = 0;
+                    while (myct < num_rays) {
+                        myFile << &host_rays_unnormalized[myct] << "\n";
+                        ++myct;
+                    }
+                    myFile.close();
+
+                    myFile.open("steps1.txt");
+                    myct = 0;
+                    while (myct < num_rays) {
+                        myFile << host_numsteps[myct * 2] << " " << host_numsteps[myct * 2 + 1] << "\n";
+                        ++myct;
+                    }
+                    myFile.close();
+                }
+
+                uint32_t pt_idx = 0, ray_idx = 0;
+                for (auto old_ray_idx: shuf_ray_idx) {
+                    new_host_ray_indices[ray_idx] = host_ray_indices[old_ray_idx];
+                    new_host_rays_unnormalized[ray_idx] = host_rays_unnormalized[old_ray_idx];
+
+                    uint32_t step = host_numsteps[old_ray_idx * 2];
+                    uint32_t old_base = host_numsteps[old_ray_idx * 2 + 1];
+                    new_host_numsteps[ray_idx * 2] = step;
+                    new_host_numsteps[ray_idx * 2 + 1] = pt_idx;
+
+                    memcpy(&new_host_points[pt_idx * floats_per_coord], &host_points[old_base * floats_per_coord],
+                           step * floats_per_coord * sizeof(float));
+
+                    pt_idx += step;
+                    ++ray_idx;
+                }
+
+                if (getfile) {
+                    std::ofstream myFile;
+                    uint32_t myct;
+                    myFile.open("pt2.txt");
+                    myct = 0;
+                    while (myct < num_pts) {
+                        for (int j = 0; j < floats_per_coord; ++j) {
+                            myFile << host_points[myct * 7 + j] << ", ";
+                        }
+                        ++myct;
+                        myFile << "\n";
+                    }
+                    myFile.close();
+
+                    myFile.open("id2.txt");
+                    myct = 0;
+                    while (myct < num_rays) {
+                        myFile << host_ray_indices[myct] << "\n";
+                        ++myct;
+                    }
+                    myFile.close();
+
+                    myFile.open("unorm2.txt");
+                    myct = 0;
+                    while (myct < num_rays) {
+                        myFile << &host_rays_unnormalized[myct] << "\n";
+                        ++myct;
+                    }
+                    myFile.close();
+
+                    myFile.open("steps2.txt");
+                    myct = 0;
+                    while (myct < num_rays) {
+                        myFile << host_numsteps[myct * 2] << " " << host_numsteps[myct * 2 + 1] << "\n";
+                        ++myct;
+                    }
+                    myFile.close();
+                }
+
+                // Update the original pointer with the reordered elements
+                CUDA_CHECK_THROW(cudaMemcpyAsync(coords, new_host_points, num_pts * floats_per_coord * sizeof(float),
+                                                 cudaMemcpyHostToDevice, stream));
+                CUDA_CHECK_THROW(
+                        cudaMemcpyAsync(ray_indices, new_host_ray_indices, num_rays * sizeof(uint32_t),
+                                        cudaMemcpyHostToDevice, stream));
+                CUDA_CHECK_THROW(cudaMemcpyAsync(rays_unnormalized, new_host_rays_unnormalized, num_rays * sizeof(Ray),
+                                                 cudaMemcpyHostToDevice, stream));
+                CUDA_CHECK_THROW(
+                        cudaMemcpyAsync(numsteps, new_host_numsteps, num_rays * 2 * sizeof(uint32_t),
+                                        cudaMemcpyHostToDevice, stream));
+                delete[] host_points;
+                delete[] host_ray_indices;
+                delete[] host_rays_unnormalized;
+                delete[] host_numsteps;
+                CUDA_CHECK_THROW(cudaStreamSynchronize(stream));
+                delete[] new_host_points;
+                delete[] new_host_ray_indices;
+                delete[] new_host_rays_unnormalized;
+                delete[] new_host_numsteps;
+            }
+        }
+after_reorder:
         if (hg_enc) {
             hg_enc->set_max_level_gpu(m_max_level_rand_training ? max_level : nullptr);
         }
@@ -3943,10 +4170,10 @@ NGP_NAMESPACE_BEGIN
         m_mesh.verts.copy_from_device(m_mesh.verts_gradient);
 
         m_mesh.verts_optimizer.reset(create_optimizer<float>({
-                                                                     {"otype", "Adam"},
+                                                                     {"otype",         "Adam"},
                                                                      {"learning_rate", 1e-4},
-                                                                     {"beta1", 0.9f},
-                                                                     {"beta2", 0.99f},
+                                                                     {"beta1",         0.9f},
+                                                                     {"beta2",         0.99f},
                                                              }));
 
         m_mesh.verts_optimizer->allocate(m_mesh.trainable_verts);
