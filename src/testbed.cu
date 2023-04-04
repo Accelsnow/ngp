@@ -172,7 +172,7 @@ void Testbed::set_mode(ETestbedMode mode) {
 	m_mesh = {};
 	m_nerf = {};
 	m_sdf = {};
-	m_volume = {};
+//	m_volume = {};
 
 	// Kill training-related things
 	m_encoding = {};
