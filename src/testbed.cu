@@ -3650,7 +3650,9 @@ void Testbed::reset_network(bool clear_density_grid) {
 			desired_resolution = compMax(m_image.resolution) / 2.0f;
 		} else if (m_testbed_mode == ETestbedMode::Volume) {
 			desired_resolution = m_volume.world2index_scale;
-		}
+		} else if (m_testbed_mode == ETestbedMode::Nerf) {
+            desired_resolution = encoding_config.value("finest_resolution", 2048.0f);
+        }
 
 		// Automatically determine suitable per_level_scale
 		m_per_level_scale = encoding_config.value("per_level_scale", 0.0f);
@@ -3662,6 +3664,7 @@ void Testbed::reset_network(bool clear_density_grid) {
 		tlog::info()
 			<< "GridEncoding: "
 			<< " Nmin=" << m_base_grid_resolution
+            << " Nmax=" << desired_resolution
 			<< " b=" << m_per_level_scale
 			<< " F=" << m_n_features_per_level
 			<< " T=2^" << log2_hashmap_size

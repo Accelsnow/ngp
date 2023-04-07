@@ -1444,7 +1444,7 @@ NGP_NAMESPACE_BEGIN
         coords_out += base;
 
         uint32_t ray_idx = atomicAdd(ray_counter, 1);
-        atomicAdd(true_pt_ct, numsteps);
+//        atomicAdd(true_pt_ct, numsteps);
 
         ray_indices_out[ray_idx] = i;
         rays_out_unnormalized[ray_idx] = ray_unnormalized;
